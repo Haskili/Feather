@@ -89,15 +89,15 @@ void handleAVR(const AVRPacket& packet, struct Aircraft& aircraft) {
         /*
             Callsign frame data is structed as follows,
 
-            - Category (3 bits)
-            - Callsign Character A (6 bits)
-            - Callsign Character B (6 bits)
-            - Callsign Character C (6 bits)
-            - Callsign Character D (6 bits)
-            - Callsign Character E (6 bits)
-            - Callsign Character F (6 bits)
-            - Callsign Character G (6 bits)
-            - Callsign Character H (6 bits)
+            - Category (3 bits @ [9, 20]): ...
+            - Character A (6 bits @ [X, Y]): ...
+            - Character B (6 bits @ [X, Y]): ...
+            - Character C (6 bits @ [X, Y]): ...
+            - Character D (6 bits @ [X, Y]): ...
+            - Character E (6 bits @ [X, Y]): ...
+            - Character F (6 bits @ [X, Y]): ...
+            - Character G (6 bits @ [X, Y]): ...
+            - Character H (6 bits @ [X, Y]): ...
 
             In terms callsign characters, the values are indices
             for a lookup table 'characterSet'. To decode the true
@@ -139,11 +139,17 @@ void handleAVR(const AVRPacket& packet, struct Aircraft& aircraft) {
     else if ((packet.typeCode >= 9 && packet.typeCode <= 18) || (packet.typeCode >= 20 && packet.typeCode <= 22)) {
         
         /*
-            The airborne position data is divided into multiple parts,
+            The airborne position data is structured as follows,
 
-            - ...
+            -   Altitude (12 bits @ [9, 20]): Aircraft altitude (barometric or GNSS)
+            -         CPR (1 bit @ [22, 22]): Determines whether frame is even or odd
+            -  Latitude (17 bits @ [23, 39]): Aircraft latitude (even / odd)
+            - Longitude (17 bits @ [40, 56]): Aircraft longitude (even / odd)
 
-            ...
+            The aircraft positional data is an altitude, and a set of coordinates. 
+            Based on the "CPR" of the frame, it's either an even or an odd frame.
+            When you can combine both even and odd frames for position you get an 
+            accurate set of coordinates for where the aircraft is.
         */
 
         // Find the 'altitude', rectify the value using
@@ -241,9 +247,15 @@ void handleAVR(const AVRPacket& packet, struct Aircraft& aircraft) {
     else if (packet.typeCode == 19) {
 
         /*
-            The velocity data is divided into multiple parts,
+            The velocity data is structured as follows,
 
-            - ...
+            -                Subtype (3 bits @ [9, 20]): ...
+            -     Vertical Direction (1 bit @ [37, 37]): ...
+            -     Vertical Velocity (9 bits @ [38, 46]): ...
+            -    East-West Direction (1 bit @ [14, 14]): ...
+            -   East-West Velocity (10 bits @ [15, 24]): ...
+            -  North-South Direction (1 bit @ [25, 25]): ...
+            - North-South Velocity (10 bits @ [26, 35]): ...
 
             ...
         */
@@ -251,7 +263,7 @@ void handleAVR(const AVRPacket& packet, struct Aircraft& aircraft) {
         // First extract the substype of the velocity data
         // to determine the type of velocity information
         // we're receiving
-        // ...
+        uint8_t subtype = static_cast<uint8_t>((packet.payload >> 36) & 0x07);
 
         // Extract the directional and velocity values
         // from the payload
@@ -420,7 +432,6 @@ int initListener() {
                 // Break down the current 'message' data into
                 // 'data' that we can further work with
                 std::optional<AVRPacket> data = breakdownAVR(message.substr(1, 28));
-                std::cout << message.substr(1, 28) << std::endl;
                 
                 // If we got back data from breaking down 'message'
                 // then handle the contents as required
