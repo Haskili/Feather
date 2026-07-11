@@ -17,7 +17,7 @@ struct PositionFrame {
 };
 
 struct Operation {
-    // ...
+    // -- TODO --
 };
 
 struct Aircraft {
@@ -300,9 +300,9 @@ void handleAVR(const AVRPacket& packet, struct Aircraft& aircraft) {
     and break it down into it's essential parts,
 
     - Downlink Format: The format of the 'message' (e.g. 17 for extended squitter)
-    -      Capability: The transponder capability (unused)
-    -       Type Code: The code dictating the type of information in the 'message'
-    -         Payload: The information of the 'message' itself
+    -       Capability: The transponder capability (unused)
+    -        Type Code: The code dictating the type of information in the 'message'
+    -          Payload: The information of the 'message' itself
 
     Currently, it only handles extended squitter messages (DF17);
     Meaning everything else will get thrown out.
@@ -360,6 +360,16 @@ std::optional<AVRPacket> breakdownAVR(const std::string& message) {
     return AVRPacket{downlinkFormat, capability, identifier, typeCode, payload};
 }
 
+/*
+    initListener() will take a given 'address' & 'port' and attempt
+    to listen for AVR messages. If it finds a message, it will strip
+    the message for the AVR string, get the information from it, and
+    use the information to update a constantly changing mapping of
+    aircraft states.
+
+    Currently, it only handles extended squitter messages (DF17);
+    Meaning everything else will get thrown out.
+*/
 int initListener(const char* address, const int port) {
 
     // Create a 'connection' to the dump1090 server
