@@ -9,12 +9,9 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 
-constexpr char* ADDRESS = "127.0.0.1";
-constexpr int PORT = 30002;
-
-struct Position {
-    double latitude;
-    double longitude;
+struct PositionFrame {
+    uint32_t latitude;
+    uint32_t longitude;
     int CPR;
     time_t timestamp;
 };
@@ -33,7 +30,7 @@ struct Aircraft {
     std::optional<uint16_t> altitude;
     std::optional<uint8_t> version;
 
-    std::optional<Position> latestPosition;
+    std::optional<PositionFrame> latestPosition;
 };
 
 struct AVRPacket
@@ -180,8 +177,8 @@ void handleAVR(const AVRPacket& packet, struct Aircraft& aircraft) {
 
         // Check if there's data in 'aircraft.latestPosition',
         // if so then get the shortcut to the data to save on decoding
-        const Position& alternatePosition = (aircraft.latestPosition != std::nullopt)? 
-            aircraft.latestPosition.value() : Position{0, 0, 0, 0};       
+        const PositionFrame& alternatePosition = (aircraft.latestPosition != std::nullopt)? 
+            aircraft.latestPosition.value() : PositionFrame{0, 0, 0, 0};       
 
         // and if so if we can use that data along with what
         // we just extract to find absolute latitude and longitude
@@ -240,7 +237,7 @@ void handleAVR(const AVRPacket& packet, struct Aircraft& aircraft) {
         }
 
         // Update the latest positional frame for 'aircraft'
-        aircraft.latestPosition = Position{latitude, longitude, CPR, timestamp};
+        aircraft.latestPosition = PositionFrame{latitude, longitude, CPR, timestamp};
     }
 
     // Handle velocity data
@@ -363,7 +360,7 @@ std::optional<AVRPacket> breakdownAVR(const std::string& message) {
     return AVRPacket{downlinkFormat, capability, identifier, typeCode, payload};
 }
 
-int initListener() {
+int initListener(const char* address, const int port) {
 
     // Create a 'connection' to the dump1090 server
     int connection = socket(AF_INET, SOCK_STREAM, 0);
@@ -372,21 +369,21 @@ int initListener() {
         return 1;
     }
 
-    // Convert values (port & address)
+    // Convert values ('port' & 'address')
     sockaddr_in server{};
     server.sin_family = AF_INET;
-    server.sin_port = htons(PORT);
-    if (inet_pton(AF_INET, ADDRESS, &server.sin_addr) <= 0) {
+    server.sin_port = htons(port);
+    if (inet_pton(AF_INET, address, &server.sin_addr) <= 0) {
         std::cerr << "Invalid address\n";
         close(connection);
-        return 1;
+        return 2;
     }
 
     // Connect to the dump1090 server
     if (connect(connection, (sockaddr*)&server, sizeof(server)) < 0) {
         std::cerr << "Connection failed\n";
         close(connection);
-        return 1;
+        return 3;
     }
 
     // Define a reusable 'buffer' to handle data from the server
@@ -475,5 +472,5 @@ int initListener() {
 }
 
 int main(int argc, char* argv[]) {
-    return initListener();
+    return initListener("127.0.0.1", 30002);
 }
