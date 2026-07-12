@@ -29,8 +29,7 @@ struct Aircraft {
     std::optional<double> heading;
     std::optional<uint16_t> altitude;
     std::optional<uint8_t> version;
-
-    std::optional<PositionFrame> latestPosition;
+    std::optional<PositionFrame> previousPosition;
 };
 
 struct AVRPacket
@@ -40,6 +39,7 @@ struct AVRPacket
     uint32_t identifier;
     uint8_t typeCode;
     uint64_t payload;
+    uint8_t CRC;
 };
 
 /*
@@ -72,13 +72,13 @@ int NL(const double& latitude) {
 /*
     handleAVR() will take the 'packet' of information given,
     and attempt to extract useful information from it; This 
-    information can be callsign, surface position, 
+    information can be a callsign, surface position, 
     airborne position, velocity, or operational status data.
 
     Once the information is extracted, it will be stored inside
     the given 'aircraft' structure for further use by the caller.
 */
-void handleAVR(const AVRPacket& packet, struct Aircraft& aircraft) {
+void handleAVR(const AVRPacket& packet, Aircraft& aircraft) {
 
     // Handle callsign data
     if (packet.typeCode >= 1 && packet.typeCode <= 4) {
@@ -175,25 +175,25 @@ void handleAVR(const AVRPacket& packet, struct Aircraft& aircraft) {
         uint32_t longitude = static_cast<uint32_t>((packet.payload >> 0) & 0x1FFFF);
         time_t timestamp = std::time(nullptr);
 
-        // Check if there's data in 'aircraft.latestPosition',
+        // Check if there's data in 'aircraft.previousPosition',
         // if so then get the shortcut to the data to save on decoding
-        const PositionFrame& alternatePosition = (aircraft.latestPosition != std::nullopt)? 
-            aircraft.latestPosition.value() : PositionFrame{0, 0, 0, 0};       
+        const PositionFrame& previousPosition = (aircraft.previousPosition != std::nullopt)? 
+            aircraft.previousPosition.value() : PositionFrame{0, 0, 0, 0};       
 
         // and if so if we can use that data along with what
         // we just extract to find absolute latitude and longitude
         // of the 'aircraft'
-        if (aircraft.latestPosition != std::nullopt 
-            && alternatePosition.CPR != CPR
-            && difftime(timestamp, alternatePosition.timestamp) < 10) {
+        if (aircraft.previousPosition != std::nullopt 
+            && previousPosition.CPR != CPR
+            && difftime(timestamp, previousPosition.timestamp) < 10) {
             
             // Define the even and odd latitudes
             // via the 'CPR' values
-            double latitudeEven = ((CPR == 0)? latitude : alternatePosition.latitude) / 131072.0;
-            double longitudeEven = ((CPR == 0)? longitude : alternatePosition.longitude) / 131072.0;
+            double latitudeEven = ((CPR == 0)? latitude : previousPosition.latitude) / 131072.0;
+            double longitudeEven = ((CPR == 0)? longitude : previousPosition.longitude) / 131072.0;
 
-            double latitudeOdd = ((CPR == 1)? latitude : alternatePosition.latitude) / 131072.0;
-            double longitudeOdd = ((CPR == 1)? longitude : alternatePosition.longitude) / 131072.0;
+            double latitudeOdd = ((CPR == 1)? latitude : previousPosition.latitude) / 131072.0;
+            double longitudeOdd = ((CPR == 1)? longitude : previousPosition.longitude) / 131072.0;
 
             // Get the index for latitude
             int latitudeIndex = std::floor((59 * latitudeEven) - (60 * latitudeOdd) + 0.5);
@@ -216,14 +216,27 @@ void handleAVR(const AVRPacket& packet, struct Aircraft& aircraft) {
                 // Define the absolute latitude of the 'aircraft'
                 // as the newest valid 'latitude' value
                 double latitudeAbsolute = (CPR == 0)? latitudeEven : latitudeOdd;
+                
+                // Get the zone of the absolute latitude
+                int latitudeNL = NL(latitudeAbsolute);
+
+                // Get longitude zone size
+                // 
+                // NOTE: In the formulas (e.g. Junzi Sun) we might see 
+                //       that we calculate two 'n' values, one for 
+                //       even & odd frames, and choose which one we want 
+                //       afterwards; This is a similar approach but uses
+                //       less variables but interrogates 'CPR' value twice
+                //
+                int n = (CPR == 0)? std::max(latitudeNL, 1) : std::max(latitudeNL - 1, 1);
+                
+                // Get index for longitude (refered to as 'm', see: Junzi Sun)
+                int m = std::floor(longitudeEven*(latitudeNL - 1) - longitudeOdd*latitudeNL + 0.5);
 
                 // Get the absolute value of the longitude
-                int latitudeNL = NL(latitudeAbsolute);
-                int ni = (CPR == 0)? std::max(latitudeNL, 1) : std::max(latitudeNL - 1, 1);
-                int m = std::floor(longitudeEven*(latitudeNL - 1) - longitudeOdd*latitudeNL + 0.5);
                 double longitudeAbsolute = (CPR == 0)? 
-                    (360.0 / ni) * ((m % ni) + longitudeEven) :
-                    (360.0 / ni) * ((m % ni) + longitudeOdd);
+                    (360.0 / n) * ((m % n) + longitudeEven) :
+                    (360.0 / n) * ((m % n) + longitudeOdd);
 
                 // Normalize to [-180, 180]
                 if (longitudeAbsolute >= 180)
@@ -237,7 +250,7 @@ void handleAVR(const AVRPacket& packet, struct Aircraft& aircraft) {
         }
 
         // Update the latest positional frame for 'aircraft'
-        aircraft.latestPosition = PositionFrame{latitude, longitude, CPR, timestamp};
+        aircraft.previousPosition = PositionFrame{latitude, longitude, CPR, timestamp};
     }
 
     // Handle velocity data
@@ -262,6 +275,9 @@ void handleAVR(const AVRPacket& packet, struct Aircraft& aircraft) {
         // we're receiving
         uint8_t subtype = static_cast<uint8_t>((packet.payload >> 36) & 0x07);
 
+        // Account for different 'subtype' values
+        // -- TODO --
+
         // Extract the directional and velocity values
         // from the payload
         uint8_t EWD = static_cast<uint8_t>((packet.payload >> 42) & 0x1);
@@ -278,7 +294,7 @@ void handleAVR(const AVRPacket& packet, struct Aircraft& aircraft) {
 
         // Calculate the true ground speed of the 'aircraft'
         // assuming we're not looking at something supersonic
-        uint16_t velocity = static_cast<uint16_t>(std::sqrt(pow(EWVR, 2) + pow(NSVR, 2)));
+        uint16_t velocity = static_cast<uint16_t>(std::hypot(EWVR, NSVR));
 
         // Calculate the track 'heading' of the 'aircraft'
         double heading = (std::atan2(static_cast<double>(EWVR), static_cast<double>(NSVR)) * 180.0) / M_PI;
@@ -330,8 +346,15 @@ std::optional<AVRPacket> breakdownAVR(const std::string& message) {
         else if (character >= 'A' && character <= 'F')
             data |= character - 'A' + 10;
         else
-            throw std::runtime_error("Invalid hex digit");
+            return std::nullopt;
     }
+
+    // Perform CRC before attempting to extract fields
+    uint32_t statedCRC = static_cast<uint32_t>(data & 0xFFFFFF);
+    uint32_t computedCRC = 0;
+
+    // -- TODO --
+    // if (statedCRC != computedCRC) return std::nullopt;
 
     // Mask 'data' to check the downlink format of 'data'
     // to ensure we're only processing the correct types
@@ -361,7 +384,62 @@ std::optional<AVRPacket> breakdownAVR(const std::string& message) {
 }
 
 /*
-    initListener() will take a given 'address' & 'port' and attempt
+    handleMessage() is designed as an intermediatary for actual message handling,
+    meaning that it is what manages state-map updating, etc.
+
+    Currently, it only handles extended squitter messages (DF17);
+    Meaning everything else will get thrown out.
+*/
+int handleMessage(std::unordered_map<uint32_t, Aircraft>& aircraft, const std::string& message) {
+    
+    // Check input 'message' length before startup;
+    // If beyond expected then return status to caller
+    if (message.length() == 30)
+        return 1;
+
+    // Break down the 'message' and extract the raw 'data'
+    // (e.g. nothing is read or analyzed yet)
+    std::optional<AVRPacket> data = breakdownAVR(message);
+
+    // If no 'data' could be extracted from 'message'
+    // return status to caller
+    if (data == std::nullopt)
+        return 2;
+
+    // Else, handle the contents of 'data' as required
+    //
+    // Being by assigning a shortcut to the decoded value 
+    // of the extracted 'data'
+    const AVRPacket& packet = data.value();
+
+    // If the ICAO of the aircraft that sent 'message'
+    // isn't in 'aircraft', then this is the first time
+    // we've seen it and we need to enter it into the mapping
+    if (aircraft.find(packet.identifier) == aircraft.end())
+        aircraft.emplace(packet.identifier, Aircraft{packet.identifier});
+
+    // Handle the contents of the AVR packet 'data' and update
+    // the state of aircraft in question
+    handleAVR(packet, aircraft[packet.identifier]);
+
+    // Print out our updated 'state' information
+    const auto& state = aircraft[packet.identifier];
+    std::cout
+        << std::format("{:06X}", state.identifier) << ": "
+        << "'" << state.callsign.value_or("Unknown") << "' ("
+        << ((state.latitude != std::nullopt)? std::to_string(*state.latitude)  : "?") << ", "
+        << ((state.longitude != std::nullopt)? std::to_string(*state.longitude) : "?") << ") "
+        << ((state.velocity != std::nullopt)? std::to_string(*state.velocity) : "?") << "kt "
+        << ((state.heading != std::nullopt)? std::to_string(*state.heading)  : "?") << "° "
+        << ((state.altitude != std::nullopt)? std::to_string(*state.altitude) : "?") << "ft\n";
+
+    // Successful handling of 'message',
+    // return status to caller
+    return 0;
+}
+
+/*
+    startListener() will take a given 'address' & 'port' and attempt
     to listen for AVR messages. If it finds a message, it will strip
     the message for the AVR string, get the information from it, and
     use the information to update a constantly changing mapping of
@@ -370,7 +448,7 @@ std::optional<AVRPacket> breakdownAVR(const std::string& message) {
     Currently, it only handles extended squitter messages (DF17);
     Meaning everything else will get thrown out.
 */
-int initListener(const char* address, const int port) {
+int startListener(const char* address, const int port) {
 
     // Create a 'connection' to the dump1090 server
     int connection = socket(AF_INET, SOCK_STREAM, 0);
@@ -418,7 +496,7 @@ int initListener(const char* address, const int port) {
 
         // Transfer the 'buffer' over
         incoming.append(buffer, bytes);
-        
+
         // Process the entirety of the data within 'incoming'
         // by checking for newlines and processing everything
         // that came before that
@@ -433,42 +511,10 @@ int initListener(const char* address, const int port) {
             if (!message.empty() && message.back() == '\r')
                 message.pop_back();
 
-            // Disregard any 'message' that isn't 112-bit format
-            if (message.length() == 30) {
-
-                // Break down the current 'message' data into
-                // 'data' that we can further work with
-                std::optional<AVRPacket> data = breakdownAVR(message.substr(1, 28));
-                
-                // If we got back data from breaking down 'message'
-                // then handle the contents as required
-                if (data != std::nullopt) {
-
-                    // Assign a shortcut to the decoded value of 'data'
-                    const AVRPacket& packet = data.value();
-                    
-                    // If the ICAO of the aircraft that sent 'message'
-                    // isn't in 'aircraft', then this is the first time
-                    // we've seen it and we need to enter it into the mapping
-                    if (aircraft.find(packet.identifier) == aircraft.end())
-                        aircraft.emplace(packet.identifier, Aircraft{packet.identifier});
-
-                    // Handle the contents of the AVR packet 'data' and update
-                    // the state of aircraft in question
-                    handleAVR(packet, aircraft[packet.identifier]);
-
-                    // Print out our updated 'state' information
-                    const auto& state = aircraft[packet.identifier];
-                    std::cout
-                        << std::format("{:06X}", state.identifier) << ": "
-                        << "'" << state.callsign.value_or("Unknown") << "' ("
-                        << ((state.latitude != std::nullopt)? std::to_string(*state.latitude)  : "?") << ", "
-                        << ((state.longitude != std::nullopt)? std::to_string(*state.longitude) : "?") << ") "
-                        << ((state.velocity != std::nullopt)? std::to_string(*state.velocity) : "?") << "kt "
-                        << ((state.heading != std::nullopt)? std::to_string(*state.heading)  : "?") << "° "
-                        << ((state.altitude != std::nullopt)? std::to_string(*state.altitude) : "?") << "ft\n";
-                }
-            }
+            // Call the intermediary function to handle breaking down
+            // the 'message' into readable parts, analyzing the parts,
+            // and updating the state-mapping 'aircraft'
+            handleMessage(aircraft, message.substr(1, 28));
 
             // Prepare 'incoming' for next iteration
             // by erasing up to the newline character
@@ -482,5 +528,5 @@ int initListener(const char* address, const int port) {
 }
 
 int main(int argc, char* argv[]) {
-    return initListener("127.0.0.1", 30002);
+    return startListener("127.0.0.1", 30002);
 }

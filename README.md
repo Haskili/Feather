@@ -1,6 +1,6 @@
 # Feather
 
-Feather is a lightweight ADS-B AVR message decoder designed as a small personal projet.
+Feather is a lightweight ADS-B AVR message decoder designed as a small personal project.
 
 The project is made for resource-constrained systems, providing efficient decoding of Mode-S DF17 messages with minimal resource usage.
 
@@ -22,6 +22,16 @@ Current supported message includes:
 - [ ] Surface Position
 - [x] Airborne Velocity
 - [ ] Operational Status
+
+## Roadmap
+
+- [ ] CRC verification
+- [ ] Surface Position message handling
+- [ ] Operational Status message handling
+- [ ] Local CPR
+- [ ] Refactor for better compartmentalization
+- [ ] NIC & NAC
+- [ ] Aircraft Category implementation
 
 ## Installation
 
