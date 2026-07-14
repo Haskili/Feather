@@ -17,7 +17,7 @@
 struct PositionFrame {
     uint32_t latitude;
     uint32_t longitude;
-    int CPR;
+    uint8_t CPR;
     time_t timestamp;
 };
 
@@ -127,7 +127,7 @@ uint8_t getCategory(const uint8_t& typeCode, const uint8_t& category) {
 /*
     Callsign frame data is structed as follows,
 
-    - Category (3 bits @ [9, 20]): ...
+    - Category (3 bits @ [9, 20]): Category of the aircraft itself
     - Character A (6 bits @ [X, Y]): ...
     - Character B (6 bits @ [X, Y]): ...
     - Character C (6 bits @ [X, Y]): ...
@@ -231,7 +231,7 @@ void extractAirbornePosition(const AVRPacket& packet, Aircraft& aircraft) {
             altitude = (((altitude >> 5) << 4) | (altitude & 0xF)) * 25 - 1000;
     }
     else
-        std::lround(altitude * 3.280839895);
+        altitude = std::lround(altitude * 3.280839895);
 
     aircraft.altitude = altitude;
 
@@ -321,7 +321,7 @@ void extractAirbornePosition(const AVRPacket& packet, Aircraft& aircraft) {
 /*
     The velocity data is structured as follows,
 
-    -                Subtype (3 bits @ [9, 20]): ...
+    -                Subtype (3 bits @ [9, 20]): Tells us super vs subsonic speed
     -     Vertical Direction (1 bit @ [37, 37]): ...
     -     Vertical Velocity (9 bits @ [38, 46]): ...
     -    East-West Direction (1 bit @ [14, 14]): ...
@@ -329,7 +329,13 @@ void extractAirbornePosition(const AVRPacket& packet, Aircraft& aircraft) {
     -  North-South Direction (1 bit @ [25, 25]): ...
     - North-South Velocity (10 bits @ [26, 35]): ...
 
-    ...
+    For each direction that we extract (NSEW & UD),
+    we extract the velocity component seperately.
+    The direction component tells us what direction
+    we're going, and thus whether the velocity is
+    negative. For example, if the East-West direction 
+    is '1', then the direction is "West" and the 
+    velocity is negative.
 */
 void extractVelocity(const AVRPacket& packet, Aircraft& aircraft) {
 
