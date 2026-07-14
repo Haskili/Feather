@@ -13,7 +13,7 @@ The project is made for resource-constrained systems, providing efficient decodi
 - Suitable for real-time embedded applications
 - Prebuilt to listen for backbones such as `dump1090_rs`
 
-## Supported Messages
+## Supported Message Types
 
 Current supported message includes:
 
@@ -25,13 +25,13 @@ Current supported message includes:
 
 ## Roadmap
 
-- [ ] CRC verification
+- [x] CRC verification
 - [ ] Surface Position message handling
 - [ ] Operational Status message handling
 - [ ] Local CPR
 - [ ] Refactor for better compartmentalization
 - [ ] NIC & NAC
-- [ ] Aircraft Category implementation
+- [x] Aircraft Category implementation
 
 ## Installation
 
@@ -47,5 +47,5 @@ This project is made possible by the many amazing online resources such as:
 
 - ["The 1090 Megahertz Riddle"](https://mode-s.org/1090mhz/misc/preface.html) by Junzi Sun (the "pyModeS" author)
 - ["Mode S Packet Decoder"](http://jasonplayne.com:8080/#)
-- [Live traffic maps](https://globe.theairtraffic.com/) like the one over at theairtraffic.com
+- Live traffic maps like [the one over at theairtraffic.com](https://globe.theairtraffic.com/)
 - ["ADS-B Guide"](https://blog.exploit.org/ads-b-guide-demodulation-and-decoding/) by "Sterva"
