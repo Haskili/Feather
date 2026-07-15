@@ -749,15 +749,12 @@ int startFileReader(const char* filename) {
 
     // File wasn't able to be opened,
     // return status to caller
-    else
+    else {
+        std::cerr << "Unable to open file: '" << filename << "'\n";
         return 1;
+    }
 
     // File processing sucessful,
     // return status to caller
     return 0;
-}
-
-int main(int argc, char* argv[]) {
-    //return startListener("127.0.0.1", 30002);
-    return startFileReader("1090_4.out");
 }
