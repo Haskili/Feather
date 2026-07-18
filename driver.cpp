@@ -10,6 +10,7 @@ int handleArguments(int argc, char* argv[]) {
     for (int i = 1; i < argc; i++) {
         
         // If we're being asked for the help page
+        // -- TODO --
         if (argv[i] == "-h")
             return 0;
 
@@ -44,6 +45,7 @@ int handleArguments(int argc, char* argv[]) {
         // ELse-if we're being asked for unit tests
         else if (strcmp("-t", argv[i]) == 0) {
             
+            // Run unit tests
             // -- TODO --
 
             // Else, incorrect number of arguments;

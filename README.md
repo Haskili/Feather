@@ -38,9 +38,10 @@ Current supported message includes:
 - [ ] Surface Position message handling
 - [ ] Operational Status message handling
 - [ ] Local CPR
-- [ ] Refactor for better compartmentalization
+- [x] Refactor for better compartmentalization
 - [ ] NIC & NAC
 - [x] Aircraft Category implementation
+- [ ] Unit tests
 
 ## Requirements
 In terms of requirements, the only thing needed is an ADS-B AVR source as either a socket or as a file.
