@@ -34,14 +34,17 @@ Current supported message includes:
 
 ## Roadmap
 
-- [x] CRC verification
+- [x] Refactor for better compartmentalization
+- [x] CRC verification within `breakdownAVR()`
+- [x] Aircraft Category implementation
+- [ ] Remodel structs (e.g. `AircraftState` -> `VelocityData`, `PositionalData`, etc.)
+- [ ] Implement Local CPR within `extractVelocity()`
 - [ ] Surface Position message handling
 - [ ] Operational Status message handling
-- [ ] Local CPR
-- [x] Refactor for better compartmentalization
-- [ ] NIC & NAC
-- [x] Aircraft Category implementation
 - [ ] Unit tests
+- [ ] CRC algorithm remodel
+- [ ] NIC & NAC
+- [ ] Optional UI package (**BIG UPDATE**)
 
 ## Requirements
 In terms of requirements, the only thing needed is an ADS-B AVR source as either a socket or as a file.

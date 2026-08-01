@@ -1,8 +1,8 @@
 #include "decoder.cpp"
 
 /*
-    handleArguments() is a mini-function to help parse arguments
-    as an example of how to utilize "Feather"
+    handleArguments() is an example of how to parse arguments
+    and feed them into the "Feather" library functions
 */
 int handleArguments(int argc, char* argv[]) {
 

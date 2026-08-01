@@ -22,7 +22,7 @@ struct PositionFrame {
 };
 
 struct OperationalStatus {
-    uint8_t subtype;
+    bool airborne;
     uint8_t ADSBVersion;
     uint16_t capacityClass;
 };
@@ -319,7 +319,7 @@ void extractAirbornePosition(const AVRPacket& packet, Aircraft& aircraft) {
 }
 
 /*
-    The velocity data is structured as follows,
+    The velocity data is structured as follows for sub-types 1 & 2,
 
     -                Subtype (3 bits @ [9, 20]): Tells us super vs subsonic speed
     -     Vertical Direction (1 bit @ [37, 37]): ...
@@ -344,33 +344,64 @@ void extractVelocity(const AVRPacket& packet, Aircraft& aircraft) {
     // we're receiving
     uint8_t subtype = static_cast<uint8_t>((packet.payload >> 36) & 0x07);
 
-    // Account for different 'subtype' values
-    // -- TODO --
+    /*
+        TODO: Refactor such that the velocity and heading are
+              set outside of the if-condition waterfall below
+              checking the 'subtype'
+    */
 
-    // Extract the directional and velocity values
-    // from the payload
-    uint8_t EWD = static_cast<uint8_t>((packet.payload >> 42) & 0x1);
-    uint16_t EWV = static_cast<uint16_t>((packet.payload>> 32) & 0x3FF);
-    int EWVR = (EWD == 0)? EWV : -1 * static_cast<int>(EWV);
+    // If the 'subtype' indicates that we're looking at 
+    // the ground speed of an aircraft
+    if (subtype == 1 || subtype == 2) {
 
-    uint8_t NSD = static_cast<uint8_t>((packet.payload >> 31) & 0x1);
-    uint16_t NSV = static_cast<uint16_t>((packet.payload >> 21) & 0x3FF);
-    int NSVR = (NSD == 0)? NSV : -1 * static_cast<int>(NSV);
+        // Extract the directional and velocity values
+        // from the payload
+        uint8_t EWD = static_cast<uint8_t>((packet.payload >> 42) & 0x1);
+        uint16_t EWV = static_cast<uint16_t>((packet.payload>> 32) & 0x3FF);
+        int EWVR = (EWD == 0)? EWV : -1 * static_cast<int>(EWV);
 
-    uint8_t UDD = static_cast<uint8_t>((packet.payload >> 19) & 0x1);
-    uint16_t UDV = static_cast<uint16_t>((packet.payload >> 10) & 0x1FF);
-    int UDVR = (UDD == 0)? UDV : -1 * static_cast<int>(UDV);
+        uint8_t NSD = static_cast<uint8_t>((packet.payload >> 31) & 0x1);
+        uint16_t NSV = static_cast<uint16_t>((packet.payload >> 21) & 0x3FF);
+        int NSVR = (NSD == 0)? NSV : -1 * static_cast<int>(NSV);
 
-    // Calculate the true ground speed of the 'aircraft'
-    // assuming we're not looking at something supersonic
-    uint16_t velocity = static_cast<uint16_t>(std::hypot(EWVR, NSVR));
+        uint8_t UDD = static_cast<uint8_t>((packet.payload >> 19) & 0x1);
+        uint16_t UDV = static_cast<uint16_t>((packet.payload >> 10) & 0x1FF);
+        int UDVR = (UDD == 0)? UDV : -1 * static_cast<int>(UDV);
 
-    // Calculate the track 'heading' of the 'aircraft'
-    double heading = (std::atan2(static_cast<double>(EWVR), static_cast<double>(NSVR)) * 180.0) / M_PI;
+        // Calculate the true ground speed of the 'aircraft'
+        // assuming we're not looking at something supersonic
+        uint16_t velocity = static_cast<uint16_t>(std::hypot(EWVR, NSVR));
 
-    // Assign 'velocity' and 'heading' data to the 'aircraft'
-    aircraft.velocity = velocity;
-    aircraft.heading = (heading >= 0)? heading : (heading + 360.0);
+        // Calculate the track 'heading' of the 'aircraft'
+        double heading = (std::atan2(static_cast<double>(EWVR), static_cast<double>(NSVR)) * 180.0) / M_PI;
+
+        // Assign 'velocity' and 'heading' data to the 'aircraft'
+        aircraft.velocity = velocity;
+        aircraft.heading = (heading >= 0)? heading : (heading + 360.0);
+    }
+
+    // Else, if we're being given a velocity packet where
+    // the ground speed of the aircraft is not known
+    else if (subtype == 3 || subtype == 4) {
+        
+        // Get the status of magnetic heading availability
+        uint8_t headingStatus = static_cast<uint8_t>((packet.payload >> 42) & 0x1);
+
+        // Get the magnetic heading (might not be available)
+        uint16_t headingRaw = static_cast<uint16_t>((packet.payload >> 32) & 0x000003FF);
+        double heading = (headingStatus == 0)? 0 : static_cast<double>(headingRaw) * 360.0 / 1024.0;
+
+        // Get the airspeed type (0: indicated, 1: true)
+        uint8_t airspeedType = static_cast<uint8_t>((packet.payload >> 31) & 0x1);
+
+        // Get the airspeed
+        uint16_t airspeedRaw = static_cast<uint16_t>((packet.payload >> 21) & 0x000003FF);
+        uint16_t velocity = (subtype == 3)? airspeedRaw - 1 : 4 * (airspeedRaw - 1);
+
+        // Assign 'velocity' and 'heading' data to the 'aircraft'
+        aircraft.velocity = velocity;
+        aircraft.heading = heading;
+    }
 }
 
 /*
@@ -384,6 +415,8 @@ void extractOperationalStatus(const AVRPacket& packet, Aircraft& aircraft) {
 
     // Extract info common between both version 1 & 2
     uint8_t subtype = static_cast<uint8_t>((packet.payload >> 48) & 0x07);
+    bool airborne = (subtype == 0);
+
     uint16_t capacityClass = 0;
     if (subtype == 0)
         capacityClass = static_cast<uint16_t>((packet.payload >> 32) & 0x3FFF);
@@ -404,12 +437,12 @@ void extractOperationalStatus(const AVRPacket& packet, Aircraft& aircraft) {
     if (aircraft.status.has_value()) {
         OperationalStatus& status = aircraft.status.value();
 
-        status.subtype = subtype;
+        status.airborne = airborne;
         status.ADSBVersion = version;
         status.capacityClass = capacityClass;
     }
     else
-        aircraft.status = OperationalStatus {subtype, version, capacityClass};
+        aircraft.status = OperationalStatus {airborne, version, capacityClass};
 }
 
 /*
