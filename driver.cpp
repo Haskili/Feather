@@ -1,5 +1,27 @@
 #include "decoder.cpp"
 
+constexpr const char* help = R"(Feather - An ADS-B processing utility
+Usage: feather [OPTION] [AUXILLARY-OPTION-INFO]...
+
+Options:
+    -h, --help
+        Display this help message.
+
+    -l, --listener <ADDRESS> <PORT>
+        Connect to a network listener.
+
+    -f, --file <FILE>
+        Read ADS-B data from an input file with new-line seperated values.
+
+    -t, --test
+        Run the unit tests.
+
+Examples:
+    feather -l 127.0.0.1 30002
+    feather -f example.in
+    feather -t
+)";
+
 /*
     handleArguments() is an example of how to parse arguments
     and feed them into the "Feather" library functions
@@ -11,11 +33,17 @@ int handleArguments(int argc, char* argv[]) {
         
         // If we're being asked for the help page
         // -- TODO --
-        if (argv[i] == "-h")
+        if (strcmp("-h", argv[i]) == 0 || strcmp("--help", argv[i]) == 0) {
+            std::cout << help;
             return 0;
+        }
 
         // ELse-if we're being asked for a listener
-        else if (strcmp("-l", argv[i]) == 0) {
+        //
+        // NOTE: Default should be 127.0.0.1 on port 30002
+        //       for standard 'dump1090_rs' configuration
+        //
+        else if (strcmp("-l", argv[i]) == 0 || strcmp("--listener", argv[i]) == 0) {
             
             // Check to ensure we have at least 2 arguments
             // after this to designate the address and port
@@ -29,7 +57,7 @@ int handleArguments(int argc, char* argv[]) {
         }
 
         // ELse-if we're being asked for file I/O
-        else if (strcmp("-f", argv[i]) == 0) {
+        else if (strcmp("-f", argv[i]) == 0 || strcmp("--file", argv[i]) == 0) {
             
             // Check to ensure we have at least 1 argument
             // after this to designate the filename
@@ -43,7 +71,7 @@ int handleArguments(int argc, char* argv[]) {
         }
 
         // ELse-if we're being asked for unit tests
-        else if (strcmp("-t", argv[i]) == 0) {
+        else if (strcmp("-t", argv[i]) == 0 || strcmp("--test", argv[i]) == 0) {
             
             // Run unit tests
             // -- TODO --

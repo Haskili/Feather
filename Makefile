@@ -1,4 +1,4 @@
-feather: decoder.cpp
+feather: decoder.cpp driver.cpp
 	g++ -o feather driver.cpp
 
 run: feather
