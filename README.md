@@ -37,7 +37,7 @@ Current supported message includes:
 - [x] Refactor for better compartmentalization
 - [x] CRC verification within `breakdownAVR()`
 - [x] Aircraft Category implementation
-- [ ] Remodel structs (e.g. `AircraftState` -> `VelocityData`, `PositionalData`, etc.)
+- [x] Remodel structs (e.g. `AircraftState` -> `VelocityData`, `PositionalData`, etc.)
 - [ ] Implement Local CPR within `extractVelocity()`
 - [ ] Surface Position message handling
 - [ ] Operational Status message handling
