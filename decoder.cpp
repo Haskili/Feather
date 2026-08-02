@@ -14,32 +14,6 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 
-struct PositionFrame {
-    uint32_t latitude;
-    uint32_t longitude;
-    uint8_t CPR;
-    time_t timestamp;
-};
-
-struct OperationalStatus {
-    bool airborne;
-    uint8_t ADSBVersion;
-    uint16_t capacityClass;
-};
-
-struct Aircraft {
-    uint32_t identifier;
-    std::optional<std::string> callsign;
-    std::optional<double> latitude;
-    std::optional<double> longitude;
-    std::optional<double> velocity;
-    std::optional<double> heading;
-    std::optional<int32_t> altitude;
-    std::optional<uint8_t> category;
-    std::optional<OperationalStatus> status;
-    std::optional<PositionFrame> previousPosition;
-};
-
 struct AVRPacket
 {
     uint8_t downlinkFormat;
@@ -48,6 +22,55 @@ struct AVRPacket
     uint8_t typeCode;
     uint64_t payload;
     uint32_t CRC;
+};
+
+struct PositionFrame {
+    uint32_t latitude;
+    uint32_t longitude;
+    uint8_t CPR;
+    time_t timestamp;
+};
+
+struct Identification {
+    std::string callsign;
+    uint8_t category;
+};
+
+struct Velocity {
+    double velocity;
+    double heading;
+};
+
+struct Position {
+    std::optional<double> latitude;
+    std::optional<double> longitude;
+    uint32_t altitude;
+    std::optional<PositionFrame> LatestOdd;
+    std::optional<PositionFrame> LatestEven;
+};
+
+struct OperationalStatus {
+    bool airborne;
+    uint8_t version;
+    uint16_t capacity;
+};
+
+struct Aircraft {
+
+    // 24-bit aircraft ICAO
+    uint32_t identifier;
+
+    // Calsign Data Group
+    std::optional<Identification> identification;
+    
+    // Position Data Group
+    std::optional<Position> position;
+
+    // Velocity Data Group
+    std::optional<Velocity> velocity;
+    
+    // Operational Status Data Group
+    std::optional<OperationalStatus> status;
 };
 
 constexpr std::array<const std::string_view, 18> aircraftCategoryEnumeration {
@@ -143,6 +166,10 @@ uint8_t getCategory(const uint8_t& typeCode, const uint8_t& category) {
 */
 void extractCallsign(const AVRPacket& packet, Aircraft& aircraft) {
     
+    // Use 'emplace()' if needed to ensure correctness
+    if (!aircraft.identification.has_value())
+        aircraft.identification.emplace();
+
     // Find the 'category' for the 'aircraft'
     uint8_t categoryRaw = static_cast<uint8_t>((packet.payload >> 48) & 0x07);
     uint8_t category = getCategory(packet.typeCode, categoryRaw);
@@ -165,8 +192,8 @@ void extractCallsign(const AVRPacket& packet, Aircraft& aircraft) {
     }
 
     // Finish by updating the 'aircraft' with information found
-    aircraft.callsign = callsign;
-    aircraft.category = category;
+    aircraft.identification->callsign = callsign;
+    aircraft.identification->category = category;
 }
 
 /*
@@ -199,6 +226,9 @@ void extractSurfacePosition(const AVRPacket& packet, Aircraft& aircraft) {
 
     // -- TODO --
     // POSITION
+
+    // Finish by updating the 'aircraft' with information found
+    // -- TODO --
 }
 
 /*
@@ -215,6 +245,10 @@ void extractSurfacePosition(const AVRPacket& packet, Aircraft& aircraft) {
     accurate set of coordinates for where the aircraft is.
 */
 void extractAirbornePosition(const AVRPacket& packet, Aircraft& aircraft) {
+
+    // Use 'emplace()' if needed to ensure correctness
+    if (!aircraft.position.has_value())
+        aircraft.position.emplace();
 
     // Find the 'altitude', rectify the value using
     // the Q-bit if needed, and then set the value
@@ -233,8 +267,6 @@ void extractAirbornePosition(const AVRPacket& packet, Aircraft& aircraft) {
     else
         altitude = std::lround(altitude * 3.280839895);
 
-    aircraft.altitude = altitude;
-
     // Grab the 'CPR' of the frame along 
     // with the 'latitude' and 'longitude'
     uint8_t CPR = static_cast<uint8_t>((packet.payload >> 34) & 0x1);
@@ -242,16 +274,20 @@ void extractAirbornePosition(const AVRPacket& packet, Aircraft& aircraft) {
     uint32_t longitude = static_cast<uint32_t>((packet.payload >> 0) & 0x1FFFF);
     time_t timestamp = std::time(nullptr);
 
-    // Check if there's data in 'aircraft.previousPosition',
-    // if so then get the shortcut to the data to save on decoding
-    const PositionFrame& previousPosition = aircraft.previousPosition.value_or(PositionFrame{});
+    // Create shortcut to previous position based on what we
+    // need given the 'CPR' value of the latest packet
+    const PositionFrame& previousPosition = (CPR == 0)?
+        aircraft.position->LatestOdd.value_or(PositionFrame{}) : 
+        aircraft.position->LatestEven.value_or(PositionFrame{});
 
-    // If there's previous position data, can we use it to
-    // find absolute latitude and longitude of the 'aircraft'
-    if (aircraft.previousPosition.has_value()
-        && previousPosition.CPR != CPR
-        && difftime(timestamp, previousPosition.timestamp) < 10) {
-        
+    bool hasMatchingFrame = ((CPR == 0 && aircraft.position->LatestOdd))
+                        || (CPR == 1 && aircraft.position->LatestEven);
+
+    // If there's previous position data and it's within 10 seconds
+    // of our current frame we can use it to perform global position
+    // decoding to find absolute latitude and longitude of the 'aircraft'
+    if (hasMatchingFrame && difftime(timestamp, previousPosition.timestamp) < 10) {
+
         // Define the even and odd latitudes
         // via the 'CPR' values
         double latitudeEven = ((CPR == 0)? latitude : previousPosition.latitude) / 131072.0;
@@ -307,15 +343,24 @@ void extractAirbornePosition(const AVRPacket& packet, Aircraft& aircraft) {
             if (longitudeAbsolute >= 180)
                 longitudeAbsolute -= 360;
 
-            // Update the state of 'aircraft' with
-            // the newly calculated values
-            aircraft.latitude = latitudeAbsolute;
-            aircraft.longitude = longitudeAbsolute;
+            // Finish by updating the 'aircraft' with information found
+            aircraft.position->latitude = latitudeAbsolute;
+            aircraft.position->longitude = longitudeAbsolute;
         }
     }
 
+    // Else, we could perform local position decoding?
+    // TODO: Implementation
+    else {
+        // ...
+    }
+
     // Update the latest positional frame for 'aircraft'
-    aircraft.previousPosition = PositionFrame{latitude, longitude, CPR, timestamp};
+    aircraft.position->altitude = altitude;
+    if (CPR == 0)
+        aircraft.position->LatestEven.emplace(PositionFrame{latitude, longitude, CPR, timestamp});
+    else
+        aircraft.position->LatestOdd.emplace(PositionFrame{latitude, longitude, CPR, timestamp});
 }
 
 /*
@@ -339,16 +384,19 @@ void extractAirbornePosition(const AVRPacket& packet, Aircraft& aircraft) {
 */
 void extractVelocity(const AVRPacket& packet, Aircraft& aircraft) {
 
+    // Use 'emplace()' if needed to ensure correctness
+    if (!aircraft.velocity.has_value())
+        aircraft.velocity.emplace();
+
     // First extract the substype of the velocity data
     // to determine the type of velocity information
     // we're receiving
     uint8_t subtype = static_cast<uint8_t>((packet.payload >> 36) & 0x07);
 
-    /*
-        TODO: Refactor such that the velocity and heading are
-              set outside of the if-condition waterfall below
-              checking the 'subtype'
-    */
+    // Declare velocity and heading values,
+    // which are universal regardless of 'subtype'
+    uint16_t velocity = 0;
+    double heading = 0.0;
 
     // If the 'subtype' indicates that we're looking at 
     // the ground speed of an aircraft
@@ -370,14 +418,13 @@ void extractVelocity(const AVRPacket& packet, Aircraft& aircraft) {
 
         // Calculate the true ground speed of the 'aircraft'
         // assuming we're not looking at something supersonic
-        uint16_t velocity = static_cast<uint16_t>(std::hypot(EWVR, NSVR));
+        velocity = static_cast<uint16_t>(std::hypot(EWVR, NSVR));
 
         // Calculate the track 'heading' of the 'aircraft'
-        double heading = (std::atan2(static_cast<double>(EWVR), static_cast<double>(NSVR)) * 180.0) / M_PI;
+        heading = (std::atan2(static_cast<double>(EWVR), static_cast<double>(NSVR)) * 180.0) / M_PI;
 
-        // Assign 'velocity' and 'heading' data to the 'aircraft'
-        aircraft.velocity = velocity;
-        aircraft.heading = (heading >= 0)? heading : (heading + 360.0);
+        // Rectify 'heading' if it's below 0.0
+        heading += (heading >= 0.0? 0.0 : 360.0);
     }
 
     // Else, if we're being given a velocity packet where
@@ -389,19 +436,19 @@ void extractVelocity(const AVRPacket& packet, Aircraft& aircraft) {
 
         // Get the magnetic heading (might not be available)
         uint16_t headingRaw = static_cast<uint16_t>((packet.payload >> 32) & 0x000003FF);
-        double heading = (headingStatus == 0)? 0 : static_cast<double>(headingRaw) * 360.0 / 1024.0;
+        heading = (headingStatus == 0)? 0 : static_cast<double>(headingRaw) * 360.0 / 1024.0;
 
         // Get the airspeed type (0: indicated, 1: true)
         uint8_t airspeedType = static_cast<uint8_t>((packet.payload >> 31) & 0x1);
 
         // Get the airspeed
         uint16_t airspeedRaw = static_cast<uint16_t>((packet.payload >> 21) & 0x000003FF);
-        uint16_t velocity = (subtype == 3)? airspeedRaw - 1 : 4 * (airspeedRaw - 1);
-
-        // Assign 'velocity' and 'heading' data to the 'aircraft'
-        aircraft.velocity = velocity;
-        aircraft.heading = heading;
+        velocity = (subtype == 3)? airspeedRaw - 1 : 4 * (airspeedRaw - 1);
     }
+
+    // Finish by updating the 'aircraft' with information found
+    aircraft.velocity->velocity = velocity;
+    aircraft.velocity->heading = heading;
 }
 
 /*
@@ -412,6 +459,10 @@ void extractVelocity(const AVRPacket& packet, Aircraft& aircraft) {
     ...
 */
 void extractOperationalStatus(const AVRPacket& packet, Aircraft& aircraft) {
+
+    // Use 'emplace()' if needed to ensure correctness
+    if (!aircraft.status.has_value())
+        aircraft.status.emplace();
 
     // Extract info common between both version 1 & 2
     uint8_t subtype = static_cast<uint8_t>((packet.payload >> 48) & 0x07);
@@ -433,16 +484,10 @@ void extractOperationalStatus(const AVRPacket& packet, Aircraft& aircraft) {
         // -- TODO --
     }
 
-    // Update 'aircraft' information
-    if (aircraft.status.has_value()) {
-        OperationalStatus& status = aircraft.status.value();
-
-        status.airborne = airborne;
-        status.ADSBVersion = version;
-        status.capacityClass = capacityClass;
-    }
-    else
-        aircraft.status = OperationalStatus {airborne, version, capacityClass};
+    // Finish by updating the 'aircraft' with information found
+    aircraft.status->airborne = airborne;
+    aircraft.status->version = version;
+    aircraft.status->capacity = capacityClass;
 }
 
 /*
@@ -636,14 +681,17 @@ int handleMessage(std::unordered_map<uint32_t, Aircraft>& aircraft, const std::s
     handleAVR(packet, state);
 
     // Print out our updated 'state' information
+    const auto& identification = state.identification;
+    const auto& position = state.position;
+    const auto& velocity = state.velocity;
     std::cout
         << std::format("{:06X}", state.identifier) << ": '"
-        << state.callsign.value_or("Unknown") << "' ("
-        << (state.latitude.has_value()? std::to_string(*state.latitude)  : "?") << ", "
-        << (state.longitude.has_value()? std::to_string(*state.longitude) : "?") << ") "
-        << (state.velocity.has_value()? std::to_string(*state.velocity) : "?") << "kt "
-        << (state.heading.has_value()? std::to_string(*state.heading)  : "?") << "° "
-        << (state.altitude.has_value()? std::to_string(*state.altitude) : "?") << "ft\n";
+        << (identification? identification->callsign : "Unknown") << "' ("
+        << ((position && position->latitude)? std::to_string(position->latitude.value()) : "?") << ", "
+        << ((position && position->longitude)? std::to_string(position->longitude.value()) : "?") << ") "
+        << (velocity? std::to_string(velocity->velocity) : "?") << "kt "
+        << (velocity? std::to_string(velocity->heading) : "?") << "° "
+        << (position? std::to_string(position->altitude) : "?") << "ft\n";
 
     // Successful handling of 'message',
     // return status to caller
