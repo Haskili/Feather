@@ -38,12 +38,15 @@ Current supported message includes:
 - [x] CRC verification within `breakdownAVR()`
 - [x] Aircraft Category implementation
 - [x] Remodel structs (e.g. `AircraftState` -> `VelocityData`, `PositionalData`, etc.)
-- [ ] Implement Local CPR within `extractVelocity()`
+- [ ] Gillham-coded altitudes values
 - [ ] Surface Position message handling
+- [ ] Consolidate surface & airborne positioning calculation code
+- [ ] Implement Local CPR within `extractVelocity()`
 - [ ] Operational Status message handling
 - [ ] Unit tests
-- [ ] CRC algorithm remodel
+- [ ] CRC algorithm refactor
 - [ ] NIC & NAC
+- [ ] Multi-threading with state management (**BIG UPDATE**)
 - [ ] Optional UI package (**BIG UPDATE**)
 
 ## Requirements

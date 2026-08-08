@@ -53,23 +53,14 @@ struct OperationalStatus {
     bool airborne;
     uint8_t version;
     uint16_t capacity;
+    std::optional<uint8_t> accuracy;
 };
 
 struct Aircraft {
-
-    // 24-bit aircraft ICAO
     uint32_t identifier;
-
-    // Calsign Data Group
     std::optional<Identification> identification;
-    
-    // Position Data Group
     std::optional<Position> position;
-
-    // Velocity Data Group
     std::optional<Velocity> velocity;
-    
-    // Operational Status Data Group
     std::optional<OperationalStatus> status;
 };
 
@@ -150,19 +141,19 @@ uint8_t getCategory(const uint8_t& typeCode, const uint8_t& category) {
 /*
     Callsign frame data is structed as follows,
 
-    - Category (3 bits @ [9, 20]): Category of the aircraft itself
-    - Character A (6 bits @ [X, Y]): ...
-    - Character B (6 bits @ [X, Y]): ...
-    - Character C (6 bits @ [X, Y]): ...
-    - Character D (6 bits @ [X, Y]): ...
-    - Character E (6 bits @ [X, Y]): ...
-    - Character F (6 bits @ [X, Y]): ...
-    - Character G (6 bits @ [X, Y]): ...
-    - Character H (6 bits @ [X, Y]): ...
+    - Category (3 bits @ [9, 20]): Category of the aircraft
+    - Character A (6 bits @ [X, Y]): First character index
+    - Character B (6 bits @ [X, Y]): Second character index
+    - Character C (6 bits @ [X, Y]): Third character index
+    - Character D (6 bits @ [X, Y]): Fourth character index
+    - Character E (6 bits @ [X, Y]): Fifth character index
+    - Character F (6 bits @ [X, Y]): Six character index
+    - Character G (6 bits @ [X, Y]): Seventh character index
+    - Character H (6 bits @ [X, Y]): Eigth character index
 
-    In terms callsign characters, the values are indices
+    In terms of the callsign characters, the values are indices
     for a lookup table 'characterSet'. To decode the true
-    callsign information, use the table.
+    callsign information, use the table as required.
 */
 void extractCallsign(const AVRPacket& packet, Aircraft& aircraft) {
     
@@ -205,30 +196,75 @@ void extractCallsign(const AVRPacket& packet, Aircraft& aircraft) {
 */
 void extractSurfacePosition(const AVRPacket& packet, Aircraft& aircraft) {
 
+    // Use 'emplace()' if needed to ensure correctness
+    if (!aircraft.velocity.has_value())
+        aircraft.velocity.emplace();
+    if (!aircraft.position.has_value())
+        aircraft.position.emplace();
+
     // Extract the non-linear movement data first;
     // The table for (in terms of knots) which is as follows:
     //
     //        [0]: Not Available
-    //        [1]: [0, 1)
-    //     [2, 8]: [0.125, 1)
-    //    [9, 12]: [1, 2)
-    //   [13, 38]: [2, 15)
-    //   [39, 93]: [15, 70)
-    //  [94, 108]: [70, 100)
-    // [109, 123]: [100, 175)
+    //        [1]: [0, 0.125)
+    //     [2, 8]: [0.125, 1) @ 0.125kt steps
+    //    [9, 12]: [1, 2) @ 0.25kt steps
+    //   [13, 38]: [2, 15) @ 0.5kt steps
+    //   [39, 93]: [15, 70) @ 1kt steps
+    //  [94, 108]: [70, 100) @ 2kt steps 
+    // [109, 123]: [100, 175) @ 5kt steps
     //      [124]: 175+
     // [125, 127]: Reserved
     //
     uint8_t movement = static_cast<uint8_t>((packet.payload >> 44) & 0x7F);
 
-    // -- TODO --
-    // TRACK
+    // If possible, calculate the true 'velocity' of the aircraft
+    // using the raw 'movement' value and the table above
+    double velocity = 0.0;
+    if (movement == 1)
+        velocity = 0.0;
+    else if (movement >= 2 && movement <= 8)
+        velocity = 0.125 + (static_cast<double>(movement) - 2) * 0.125;
+    else if (movement >= 9 && movement <= 12)
+        velocity = 1.0 + (static_cast<double>(movement) - 9) * 0.25;
+    else if (movement >= 13 && movement <= 38)
+        velocity = 2.0 + (static_cast<double>(movement) - 13) * 0.5;
+    else if (movement >= 39 && movement <= 93)
+        velocity = 15.0 + (static_cast<double>(movement) - 39) * 1.0;
+    else if (movement >= 94 && movement <= 108)
+        velocity = 70.0 + (static_cast<double>(movement) - 94) * 2.0;
+    else if (movement >= 109 && movement <= 123)
+        velocity = 100.0 + (static_cast<double>(movement) - 109) * 5.0;
+    else if (movement == 124)
+        velocity = 175.0;
+    else
+        velocity = -1.0;
 
+    // Extract the ground status indicator and raw track value
+    uint8_t groundStatus = static_cast<uint8_t>((packet.payload >> 37) & 0x1);
+    uint8_t track = static_cast<uint8_t>((packet.payload >> 36) & 0x7F);
+
+    // Check the ground status indicator, and 
+    // calculate the true track 'heading' if possible
+    double heading = 0.0;
+    if (groundStatus != 0)
+        heading = (360.0 * static_cast<double>(track)) / 128.0;
+
+    // Grab the 'CPR' of the frame along 
+    // with the 'latitude' and 'longitude'
+    uint8_t CPR = static_cast<uint8_t>((packet.payload >> 34) & 0x1);
+    uint32_t latitude = static_cast<uint32_t>((packet.payload >> 17) & 0x1FFFF);
+    uint32_t longitude = static_cast<uint32_t>((packet.payload >> 0) & 0x1FFFF);
+    time_t timestamp = std::time(nullptr);
+
+    // Finish getting position data
     // -- TODO --
-    // POSITION
 
     // Finish by updating the 'aircraft' with information found
-    // -- TODO --
+    if (movement >= 1 && movement <= 124)
+        aircraft.velocity->velocity = velocity;
+    if (groundStatus != 0)
+        aircraft.velocity->heading = heading;
 }
 
 /*
@@ -349,8 +385,8 @@ void extractAirbornePosition(const AVRPacket& packet, Aircraft& aircraft) {
         }
     }
 
-    // Else, we could perform local position decoding?
-    // TODO: Implementation
+    // Else, attempt to perform local position decoding
+    // -- TODO --
     else {
         // ...
     }
@@ -366,13 +402,13 @@ void extractAirbornePosition(const AVRPacket& packet, Aircraft& aircraft) {
 /*
     The velocity data is structured as follows for sub-types 1 & 2,
 
-    -                Subtype (3 bits @ [9, 20]): Tells us super vs subsonic speed
-    -     Vertical Direction (1 bit @ [37, 37]): ...
-    -     Vertical Velocity (9 bits @ [38, 46]): ...
-    -    East-West Direction (1 bit @ [14, 14]): ...
-    -   East-West Velocity (10 bits @ [15, 24]): ...
-    -  North-South Direction (1 bit @ [25, 25]): ...
-    - North-South Velocity (10 bits @ [26, 35]): ...
+    -                Subtype (3 bits @ [9, 20]): Which speed category it falls under (super vs subsonic)
+    -     Vertical Direction (1 bit @ [37, 37]): Y-direction
+    -     Vertical Velocity (9 bits @ [38, 46]): Y-velocity
+    -    East-West Direction (1 bit @ [14, 14]): X-direction
+    -   East-West Velocity (10 bits @ [15, 24]): X-velocity
+    -  North-South Direction (1 bit @ [25, 25]): Z-direction
+    - North-South Velocity (10 bits @ [26, 35]): Z-velocity
 
     For each direction that we extract (NSEW & UD),
     we extract the velocity component seperately.
@@ -475,19 +511,32 @@ void extractOperationalStatus(const AVRPacket& packet, Aircraft& aircraft) {
         capacityClass = static_cast<uint16_t>((packet.payload >> 32) & 0xFFFF);
 
     // Extract the ADSB 'version' being used, and subsequent fields
-    // based on said 'version'
+    // based on said 'version';
+    //
+    // From version 1 -> 2 tere are several renamed fields and a SIL
+    // "suppliment bit" is added at position 87. See for more details:
+    // https://mode-s.org/1090mhz/content/ads-b/6-operation-status.html
     uint8_t version = static_cast<uint8_t>((packet.payload >> 13) & 0x07);
-    if (version == 1) {
-        // -- TODO --
-    }
-    else if (version == 2) {
-        // -- TODO --
+    uint8_t accuracy = 0;
+    if ((version == 1) || (version == 2)) {
+        accuracy = static_cast<uint8_t>((packet.payload >> 8) & 0x0F);
+
+        if (version == 1) {
+            // -- TODO --
+        }
+        
+        else if (version == 2) {
+            // -- TODO --
+        }
     }
 
     // Finish by updating the 'aircraft' with information found
     aircraft.status->airborne = airborne;
     aircraft.status->version = version;
     aircraft.status->capacity = capacityClass;
+
+    if ((version == 1) || (version == 2))
+        aircraft.status->accuracy.emplace(accuracy);
 }
 
 /*
@@ -506,7 +555,6 @@ void handleAVR(const AVRPacket& packet, Aircraft& aircraft) {
         extractCallsign(packet, aircraft);
 
     // Handle surface position data
-    // -- WIP --
     else if (packet.typeCode >= 5 && packet.typeCode <= 8)
         extractSurfacePosition(packet, aircraft);
 
@@ -519,7 +567,6 @@ void handleAVR(const AVRPacket& packet, Aircraft& aircraft) {
         extractVelocity(packet, aircraft);
 
     // Handle operational status data
-    // -- WIP --
     else if (packet.typeCode == 31)
         extractOperationalStatus(packet, aircraft);
 }
@@ -672,7 +719,7 @@ int handleMessage(std::unordered_map<uint32_t, Aircraft>& aircraft, const std::s
     //
     // NOTE: Using 'auto' keyword here pains me, 
     //       but the alternative is *extremely* 
-    //       cumbersome visually
+    //       visually cumbersome
     //
     auto& state = aircraft.try_emplace(packet.identifier, Aircraft{packet.identifier}).first->second;
 
@@ -692,6 +739,9 @@ int handleMessage(std::unordered_map<uint32_t, Aircraft>& aircraft, const std::s
         << (velocity? std::to_string(velocity->velocity) : "?") << "kt "
         << (velocity? std::to_string(velocity->heading) : "?") << "° "
         << (position? std::to_string(position->altitude) : "?") << "ft\n";
+
+    // Send out update to database if needed
+    // -- TODO --
 
     // Successful handling of 'message',
     // return status to caller
