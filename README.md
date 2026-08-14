@@ -24,11 +24,11 @@ The project is made with resource-constrained systems in mind, providing efficie
 
 ## Supported Message Types
 
-Current supported message includes:
+Current supported message types include:
 
 - [x] Aircraft Identification
 - [x] Airborne Position
-- [ ] Surface Position
+- [x] Surface Position
 - [x] Airborne Velocity
 - [ ] Operational Status
 
@@ -38,12 +38,12 @@ Current supported message includes:
 - [x] CRC verification within `breakdownAVR()`
 - [x] Aircraft Category implementation
 - [x] Remodel structs (e.g. `AircraftState` -> `VelocityData`, `PositionalData`, etc.)
-- [ ] Gillham-coded altitudes values
-- [ ] Surface Position message handling
-- [ ] Consolidate surface & airborne positioning calculation code
-- [ ] Implement Local CPR within `extractVelocity()`
-- [ ] Operational Status message handling
+- [x] Finish surface Position message handling
 - [ ] Unit tests
+- [ ] Implement locally unambiguous decoding
+- [ ] Consolidate surface & airborne positioning calculation code
+- [ ] Gillham-coded altitudes values
+- [ ] Operational Status message handling
 - [ ] CRC algorithm refactor
 - [ ] NIC & NAC
 - [ ] Multi-threading with state management (**BIG UPDATE**)

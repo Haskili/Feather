@@ -257,59 +257,6 @@ void extractSurfacePosition(const AVRPacket& packet, Aircraft& aircraft) {
     uint32_t longitude = static_cast<uint32_t>((packet.payload >> 0) & 0x1FFFF);
     time_t timestamp = std::time(nullptr);
 
-    // Finish getting position data
-    // -- TODO --
-
-    // Finish by updating the 'aircraft' with information found
-    if (movement >= 1 && movement <= 124)
-        aircraft.velocity->velocity = velocity;
-    if (groundStatus != 0)
-        aircraft.velocity->heading = heading;
-}
-
-/*
-    The airborne position data is structured as follows,
-
-    -   Altitude (12 bits @ [9, 20]): Aircraft altitude (barometric or GNSS)
-    -         CPR (1 bit @ [22, 22]): Determines whether frame is even or odd
-    -  Latitude (17 bits @ [23, 39]): Aircraft latitude (even / odd)
-    - Longitude (17 bits @ [40, 56]): Aircraft longitude (even / odd)
-
-    The aircraft positional data is an altitude, and a set of coordinates. 
-    Based on the "CPR" of the frame, it's either an even or an odd frame.
-    When you can combine both even and odd frames for position you get an 
-    accurate set of coordinates for where the aircraft is.
-*/
-void extractAirbornePosition(const AVRPacket& packet, Aircraft& aircraft) {
-
-    // Use 'emplace()' if needed to ensure correctness
-    if (!aircraft.position.has_value())
-        aircraft.position.emplace();
-
-    // Find the 'altitude', rectify the value using
-    // the Q-bit if needed, and then set the value
-    // for the 'aircraft'
-    //
-    // NOTE: For TC [9, 18] the altitude is barometric,
-    //       and for [20, 22] it's a GNSS height derived
-    //       from global positioning satellite measured
-    //       in meters, not feet.
-    //
-    int32_t altitude = static_cast<int32_t>((packet.payload >> 36) & 0xFFF);
-    if (packet.typeCode >= 9 && packet.typeCode <= 18) {
-        if ((altitude >> 4) & 1)
-            altitude = (((altitude >> 5) << 4) | (altitude & 0xF)) * 25 - 1000;
-    }
-    else
-        altitude = std::lround(altitude * 3.280839895);
-
-    // Grab the 'CPR' of the frame along 
-    // with the 'latitude' and 'longitude'
-    uint8_t CPR = static_cast<uint8_t>((packet.payload >> 34) & 0x1);
-    uint32_t latitude = static_cast<uint32_t>((packet.payload >> 17) & 0x1FFFF);
-    uint32_t longitude = static_cast<uint32_t>((packet.payload >> 0) & 0x1FFFF);
-    time_t timestamp = std::time(nullptr);
-
     // Create shortcut to previous position based on what we
     // need given the 'CPR' value of the latest packet
     const PositionFrame& previousPosition = (CPR == 0)?
@@ -335,9 +282,16 @@ void extractAirbornePosition(const AVRPacket& packet, Aircraft& aircraft) {
         // Get the index for latitude
         int latitudeIndex = std::floor((59 * latitudeEven) - (60 * latitudeOdd) + 0.5);
 
-        // Get latitude spacing
-        latitudeEven = (360.0 / 60.0) * ((((latitudeIndex % 60) + 60) % 60) + latitudeEven);
-        latitudeOdd = (360.0 / 59.0) * ((((latitudeIndex % 59) + 59) % 59) + latitudeOdd);
+        // Get even and odd latitudes
+        //
+        // NOTE: This combines MULTIPLE steps within the instructions,
+        //       and utilizes a constant (60.0 & 59.0, 'Nz') known 
+        //       specifically for Mode-S communication; 
+        //       
+        //       Please revise as able when incorporating future types. 
+        //
+        latitudeEven = (90.0 / 60.0) * ((((latitudeIndex % 60) + 60) % 60) + latitudeEven);
+        latitudeOdd = (90.0 / 59.0) * ((((latitudeIndex % 59) + 59) % 59) + latitudeOdd);
 
         // Normalize latitude values to [-90, 90]
         if (latitudeEven >= 270)
@@ -372,6 +326,148 @@ void extractAirbornePosition(const AVRPacket& packet, Aircraft& aircraft) {
 
             // Get the absolute value of the longitude
             double longitudeAbsolute = (CPR == 0)? 
+                (90.0 / n) * ((((m % n) + n) % n) + longitudeEven) :
+                (90.0 / n) * ((((m % n) + n) % n) + longitudeOdd);
+
+            // Normalize to [-180, 180]
+            if (longitudeAbsolute >= 180)
+                longitudeAbsolute -= 360;
+
+            // Finish by updating the 'aircraft' with information found
+            aircraft.position->latitude = latitudeAbsolute;
+            aircraft.position->longitude = longitudeAbsolute;
+        }
+    }
+
+    // Finish by updating the 'aircraft' with information found
+    if (movement >= 1 && movement <= 124)
+        aircraft.velocity->velocity = velocity;
+    if (groundStatus != 0)
+        aircraft.velocity->heading = heading;
+
+    if (CPR == 0)
+        aircraft.position->LatestEven.emplace(PositionFrame{latitude, longitude, CPR, timestamp});
+    else
+        aircraft.position->LatestOdd.emplace(PositionFrame{latitude, longitude, CPR, timestamp});
+}
+
+/*
+    The airborne position data is structured as follows,
+
+    -   Altitude (12 bits @ [9, 20]): Aircraft altitude (barometric or GNSS)
+    -         CPR (1 bit @ [22, 22]): Determines whether frame is even or odd
+    -  Latitude (17 bits @ [23, 39]): Aircraft latitude (even / odd)
+    - Longitude (17 bits @ [40, 56]): Aircraft longitude (even / odd)
+
+    The aircraft positional data is an altitude, and a set of coordinates. 
+    Based on the "CPR" of the frame, it's either an even or an odd frame.
+    When you can combine both even and odd frames for position you get an 
+    accurate set of coordinates for where the aircraft is.
+*/
+void extractAirbornePosition(const AVRPacket& packet, Aircraft& aircraft) {
+
+    // Use 'emplace()' if needed to ensure correctness
+    if (!aircraft.position.has_value())
+        aircraft.position.emplace();
+
+    // Find the 'altitude', rectify the value using
+    // the Q-bit if needed, and then set the value
+    // for the 'aircraft'
+    //
+    // NOTE: For TC [9, 18] the altitude is barometric,
+    //       and for [20, 22] it's a GNSS height derived
+    //       from global positioning satellite measured
+    //       in meters, not feet.
+    //
+    int32_t altitude = static_cast<int32_t>((packet.payload >> 36) & 0xFFF);
+    if (packet.typeCode >= 9 && packet.typeCode <= 18) {
+        if ((altitude >> 4) & 1)
+            altitude = (((altitude >> 5) << 4) | (altitude & 0xF)) * 25 - 1000;
+
+        else {
+            // -- TODO --
+        }
+    }
+    else
+        altitude = std::lround(altitude * 3.280839895);
+
+    // Grab the 'CPR' of the frame along 
+    // with the 'latitude' and 'longitude'
+    uint8_t CPR = static_cast<uint8_t>((packet.payload >> 34) & 0x1);
+    uint32_t latitude = static_cast<uint32_t>((packet.payload >> 17) & 0x1FFFF);
+    uint32_t longitude = static_cast<uint32_t>((packet.payload >> 0) & 0x1FFFF);
+    time_t timestamp = std::time(nullptr);
+
+    // Create shortcut to previous position based on what we
+    // need given the 'CPR' value of the latest packet
+    const PositionFrame& previousPosition = (CPR == 0)?
+        aircraft.position->LatestOdd.value_or(PositionFrame{}) : 
+        aircraft.position->LatestEven.value_or(PositionFrame{});
+
+    bool hasMatchingFrame = ((CPR == 0 && aircraft.position->LatestOdd))
+                        || (CPR == 1 && aircraft.position->LatestEven);
+
+    // If there's previous position data and it's within 10 seconds
+    // of our current frame we can use it to perform global position
+    // decoding to find absolute latitude and longitude of the 'aircraft'
+    if (hasMatchingFrame && difftime(timestamp, previousPosition.timestamp) < 10) {
+
+        // Define the even and odd latitudes
+        // via the 'CPR' values
+        double latitudeEven = ((CPR == 0)? latitude : previousPosition.latitude) / 131072.0;
+        double longitudeEven = ((CPR == 0)? longitude : previousPosition.longitude) / 131072.0;
+
+        double latitudeOdd = ((CPR == 1)? latitude : previousPosition.latitude) / 131072.0;
+        double longitudeOdd = ((CPR == 1)? longitude : previousPosition.longitude) / 131072.0;
+
+        // Get the index for latitude (AKA 'j' in formulas)
+        int latitudeIndex = std::floor((59 * latitudeEven) - (60 * latitudeOdd) + 0.5);
+
+        // Get even and odd latitudes
+        //
+        // NOTE: This combines MULTIPLE steps within the instructions,
+        //       and utilizes a constant (60.0 & 59.0, 'Nz') known 
+        //       specifically for Mode-S communication; 
+        //       
+        //       Please revise as able when incorporating future types. 
+        //
+        latitudeEven = (360.0 / 60.0) * ((((latitudeIndex % 60) + 60) % 60) + latitudeEven);
+        latitudeOdd = (360.0 / 59.0) * ((((latitudeIndex % 59) + 59) % 59) + latitudeOdd);
+
+        // Normalize latitude values to [-90, 90]
+        if (latitudeEven >= 270)
+            latitudeEven -= 360;
+
+        if (latitudeOdd >= 270)
+            latitudeOdd -= 360;
+
+        // Ensure both latitudes exist within the same NL zone
+        // before continuing calculation
+        if (NL(latitudeEven) == NL(latitudeOdd)) {
+
+            // Define the absolute latitude of the 'aircraft'
+            // as the newest valid 'latitude' value
+            double latitudeAbsolute = (CPR == 0)? latitudeEven : latitudeOdd;
+
+            // Get the zone of the absolute latitude
+            int latitudeNL = NL(latitudeAbsolute);
+
+            // Get longitude zone size
+            // 
+            // NOTE: In the formulas (e.g. Junzi Sun) we might see 
+            //       that we calculate two 'n' values, one for 
+            //       even & odd frames, and choose which one we want 
+            //       afterwards; This is a similar approach but uses
+            //       less variables but interrogates 'CPR' value twice
+            //       as opposed to just once and storing both results
+            //
+            int n = (CPR == 0)? std::max(latitudeNL, 1) : std::max(latitudeNL - 1, 1);
+            
+            // Get index for longitude (refered to as 'm', see: Junzi Sun)
+            int m = std::floor(longitudeEven*(latitudeNL - 1) - longitudeOdd*latitudeNL + 0.5);
+
+            // Get the absolute value of the longitude
+            double longitudeAbsolute = (CPR == 0)? 
                 (360.0 / n) * ((((m % n) + n) % n) + longitudeEven) :
                 (360.0 / n) * ((((m % n) + n) % n) + longitudeOdd);
 
@@ -385,10 +481,14 @@ void extractAirbornePosition(const AVRPacket& packet, Aircraft& aircraft) {
         }
     }
 
-    // Else, attempt to perform local position decoding
-    // -- TODO --
-    else {
-        // ...
+    // Else, we weren't able to utilize a previous frame for
+    // globally unambiguous decoding;
+    // 
+    // Attempt to perform locally umabiguous position decoding
+    // using just this message and a previously calculated
+    // absolute position as a reference point
+    else if (aircraft.position->latitude.has_value() && aircraft.position->longitude.has_value()) {
+        // -- TODO --
     }
 
     // Update the latest positional frame for 'aircraft'
@@ -692,7 +792,7 @@ std::optional<AVRPacket> breakdownAVR(const std::string& message) {
     in a return status of '2'.
 */
 int handleMessage(std::unordered_map<uint32_t, Aircraft>& aircraft, const std::string& message) {
-    
+
     // Check input 'message' structure before startup;
     // If not conforming to expectations then report 
     // status to the caller
